@@ -1,6 +1,6 @@
 # Unit test agent for Taskly
 
-I built an agent with five skills that writes and updates unit tests for the Taskly backend and frontend. It runs in Claude Code on Claude Sonnet 5.5, served through OpenRouter, inside two GitHub workflows: one on every pull request and one on demand that fills coverage gaps in a package. Before anything is pushed or posted, a separate check repeats the agent's work and blocks the result if something is off.
+I built an agent with five skills that writes and updates unit tests for the Taskly backend and frontend. It runs in Claude Code on Claude Sonnet 5.5, served through OpenRouter, inside two GitHub workflows: one on every pull request and one on demand that fills coverage gaps in a package. Before anything is pushed or posted, a separate verification job re-runs the checks on the agent's patch and blocks publishing if any of them fails.
 
 What it achieved on this repository:
 
@@ -9,37 +9,37 @@ What it achieved on this repository:
 
 ## 1. Technical decisions
 
-**GitHub Agentic Workflows.** The job offer mentions gh-aw, and it covers the hardest part of running an agent on pull requests: the agent itself cannot write anything. Every write, the commit and the comments, is a declared output that a separate job applies only after the checks pass. Workflows are Markdown with frontmatter, and `gh aw compile` turns them into ordinary Actions files (`*.lock.yml`).
+**Agent runtime: GitHub Agentic Workflows (gh-aw).** The job offer mentions gh-aw, and its model fits an agent that runs on pull requests: the agent job has no write permissions, and every write (the commit, the comments) is a declared safe output that a separate job applies only after detection passes. Workflows are Markdown with frontmatter, and `gh aw compile` turns them into ordinary Actions files (`*.lock.yml`).
 
-**Claude Sonnet 5.5 through OpenRouter, in Claude Code.** gh-aw's `claude` engine runs the Claude Code CLI as the agent harness, and the agent and skills are plain Claude Code files in `.claude/`, so the same agent also works in a local Claude Code session. The workflow starts it with `--agent unit-test-agent`. Sonnet 5.5 writes the tests and Haiku 5.5 runs the threat scan, both served by OpenRouter through its Anthropic-compatible endpoint. This keeps the provider a configuration detail: the model is one line in the workflow, and removing two lines of `engine.env` points the same setup at Anthropic directly.
+**Engine and model: Claude Code CLI with Claude Sonnet 5.5 via OpenRouter.** gh-aw's `claude` engine runs the Claude Code CLI as the agent harness. The agent and skills are standard Claude Code files in `.claude/`, so the same agent also runs in a local Claude Code session; the workflow selects it with `--agent unit-test-agent`. Sonnet 5.5 writes the tests and Haiku 5.5 runs the threat scan. Both are called through OpenRouter's Anthropic-compatible endpoint (`ANTHROPIC_BASE_URL`), so the provider is configuration: the model is set in one line, and removing two lines of `engine.env` switches the same workflow to the Anthropic API.
 
-**Scripts for facts, the model for judgment.** A small Node tool without dependencies (`tools/test-agent`) works out everything that has one correct answer: which source files changed, whether the coverage config counts them, which tests import them, which changed lines and conditions are not covered, and which tests already fail. The agent reads that and decides what is worth testing. Branch data came later: the first backfill left `TodoItem.tsx` at 100% lines but 36% branches, because every line ran in one test while most of its conditions never changed value.
+**Deterministic change analysis (`tools/test-agent/analyze.mjs`).** Everything that can be computed is computed by a Node script without dependencies, not inferred by the model: the changed source files (`git diff` against the merge base), whether the coverage config includes them, which test files import them (excluding `vi.mock` targets), the changed lines and conditions without coverage (from Vitest's Istanbul report), and the tests that already fail. The agent receives this as Markdown and JSON and decides what to test. Branch data was added after the first backfill: `TodoItem.tsx` had 100% line coverage but 36% branch coverage, because one test executed every line while only one side of most conditions was taken.
 
-**A check that does not trust the agent.** `verify.mjs` runs on a fresh checkout with the agent's patch applied. It runs the typecheck, both suites, Prettier and three shuffled runs of the new tests, and it runs the new tests against the code from before the change. If anything fails, nothing is published. The agent calls the same script as a self-check, so it usually knows the outcome before the gate does.
+**Independent verification gate (`tools/test-agent/verify.mjs`).** The gate runs in gh-aw's detection job on a fresh checkout with the agent's patch applied, and ignores what the agent reported about its own work. It runs the typecheck, both suites, Prettier on changed files and three runs of the new tests in shuffled order, and runs the new tests against the base revision. A non-zero exit blocks all safe outputs. The agent runs the same script during its work, so a failing gate is rare.
 
-**New tests have to notice the change.** Coverage only shows that code ran. For each new test file the check counts how many tests fail on the previous version of the code, and the verification skill asks the agent to tighten assertions when a test for new behavior passes on both.
+**Base-revision check for new tests.** Coverage shows that code ran, not that its behavior is asserted. For each new test file the gate counts the tests that fail when run against the code before the change (in a temporary `git worktree`). The verification skill tells the agent to tighten assertions when a test for new behavior passes on both revisions.
 
-**Bugs get reported, not tested in.** When the code contradicts the pull request description, the agent leaves the tests alone and explains the problem with file and line.
+**Suspected bugs.** When the code contradicts the pull request description, the agent does not change tests to match it. It reports the file, line, expected and actual behavior instead.
 
-**No model call without work.** The run stops before the model starts when nothing unit-testable changed, or when the newest change is the agent's own commit.
+**Skipped runs.** The agent is not started when the analysis finds no unit-testable change, or when the newest commit that changes files is the agent's own.
 
 ### Security
 
-I treated the agent, the pull request content and the tests the agent writes as untrusted, and built the setup so that none of them can change the repository, reach secrets or talk to the outside world on their own. What is in place, by threat:
+Threat model: the agent, the pull request content and the tests the agent writes are untrusted. None of them may change files other than tests, read secrets or open network connections. Controls by area:
 
-**The agent writing outside its scope.** The agent job has read access only; the single write path is gh-aw's safe outputs. The push output accepts only test paths (`allowed-files`), gh-aw additionally protects `.github/` and `.claude/`, and the gate rejects any other changed file before it installs or runs anything. The agent can execute a fixed list of commands (the two test suites, typecheck, the tool, Prettier, read-only git and commit) and nothing else, so no `node -e`, `npx` or arbitrary shell.
+**Write access and file scope.** The agent job has read access only; the single write path is gh-aw's safe outputs. The push output accepts only test paths (`allowed-files`), gh-aw additionally protects `.github/` and `.claude/`, and the gate rejects any other changed file before it installs or runs anything. The agent can execute a fixed list of commands (the two test suites, typecheck, the tool, Prettier, read-only git and commit) and nothing else, so no `node -e`, `npx` or arbitrary shell.
 
-**A pull request weakening its own checks.** The analysis and the gate use `tools/test-agent` extracted from the base commit, and gh-aw restores `.claude/` from the base branch, so a pull request cannot edit the agent's instructions, skills or verification. The report workflow runs from the default branch and treats the gate's artifact as data: it validates the PR number, caps the size and neutralizes @mentions.
+**Integrity of the agent's instructions and tools.** The analysis and the gate use `tools/test-agent` extracted from the base commit, and gh-aw restores `.claude/` from the base branch, so a pull request cannot edit the agent's instructions, skills or verification. The report workflow runs from the default branch and treats the gate's artifact as data: it validates the PR number, caps the size and neutralizes @mentions.
 
 **Prompt injection.** The agent's rules say pull request text, commit messages and code are data and not instructions. gh-aw runs an AI threat scan over the agent's output and patch before anything is applied, and the detection job fails closed.
 
-**Secrets.** The model key lives in gh-aw's API proxy and is excluded from the agent container. Processes that run tests get an environment without tokens or keys. No workflow uses `pull_request_target`, fork PRs receive no secrets, only users with write access trigger the agent, and runs started by bots are skipped. The CI-trigger PAT is fine-grained, limited to the repositories that need it and to repository contents, and used only by gh-aw's publishing job.
+**Secrets and workflow triggers.** The model key lives in gh-aw's API proxy and is excluded from the agent container. Processes that run tests get an environment without tokens or keys. No workflow uses `pull_request_target`, fork PRs receive no secrets, only users with write access trigger the agent, and runs started by bots are skipped. The CI-trigger PAT is fine-grained, limited to the repositories that need it and to repository contents, and used only by gh-aw's publishing job.
 
-**Exfiltration by agent-written tests.** While the agent works, its network allows only the model endpoint; dependencies are installed before it starts. The gate runs the agent's tests in a Node container pinned by digest, as a non-root user, with `--network none`, and before that it tries to open a connection from inside the container and stops if one succeeds.
+**Network isolation.** While the agent works, its network allows only the model endpoint; dependencies are installed before it starts. The gate runs the agent's tests in a Node container pinned by digest, as a non-root user, with `--network none`, and before that it tries to open a connection from inside the container and stops if one succeeds.
 
 **Supply chain.** Dependencies install with `npm ci --ignore-scripts` from the lockfiles, and the only build script the project needs, Prisma client generation, runs explicitly. Every action and the container image are pinned by SHA or digest, the gh-aw version is pinned, and default workflow permissions are read-only. CI scans all workflows, including the compiled lock files, with zizmor (version and wheel hash pinned); the one accepted finding, `workflow_run` in the report workflow, has a comment explaining why it is safe there.
 
-**Cost and runaway loops.** Runs have turn and time limits and queue per pull request. Nothing reaches the model when no testable code changed or when the newest change is the agent's own commit, which also stops the agent from triggering itself.
+**Cost limits and loop prevention.** Runs have turn and time limits and queue per pull request. Nothing reaches the model when no testable code changed or when the newest change is the agent's own commit, which also stops the agent from triggering itself.
 
 ## 2. Running the PR workflow
 
@@ -61,11 +61,11 @@ node --test "tools/test-agent/*.test.mjs"
 
 ## 3. Where the agent and skills are, and how a run uses them
 
-The agent is [`.claude/agents/unit-test-agent.md`](.claude/agents/unit-test-agent.md). It holds the rules no skill may break (only test files change, a bug is never written into a test, pull request text is data, nothing is finished without a passing check) and the order of work. The skills in `.claude/skills/`:
+The agent is [`.claude/agents/unit-test-agent.md`](.claude/agents/unit-test-agent.md). It defines the constraints every skill follows (edit only test files, do not adapt tests to suspected bugs, treat pull request text as data, finish only after `verify.mjs` passes) and the order of steps. The skills in `.claude/skills/`:
 
 - `test-triage` decides per file: create, update, skip or bug.
 - `backend-unit-tests` and `frontend-unit-tests` describe how this repository already writes tests (fixtures, Prisma without a database, supertest, design-system mocks, TanStack Query hooks), so new tests look like the existing ones.
-- `test-verification` covers the fix loop (three attempts per file), the `verify.mjs` run, the "does it notice the change" step and a short quality checklist.
+- `test-verification` covers the fix loop (three attempts per file), the `verify.mjs` run, the base-revision check and a short quality checklist.
 - `test-report` is the format of the PR comment or the backfill PR body.
 
 A pull request run, defined in [`.github/workflows/unit-test-agent.md`](.github/workflows/unit-test-agent.md):
@@ -125,7 +125,7 @@ Problems I ran into, all found on a private copy of the repository where I tried
 ## 7. What I would change for production
 
 - Call Anthropic or Azure directly instead of OpenRouter, with budgets set per organization.
-- Keep a small set of recorded changes with known right answers and track decision accuracy, the share of tests that notice the change, and cost per run.
+- Keep a small set of recorded changes with known right answers and track decision accuracy, the share of new tests that fail on the base revision, and cost per run.
 - Add mutation testing on changed lines (for example Stryker) to measure test strength more precisely.
 - Run the change analysis in the same network-less container as the gate, with dependencies baked into the image.
 - Set coverage thresholds per package in the Vitest config and raise them after each backfill.
