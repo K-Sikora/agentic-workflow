@@ -18,6 +18,38 @@ it('lists tasks from the repository', async () => {
   expect(response.body).toEqual([todo]);
   expect(repository.list).toHaveBeenCalledOnce();
 });
+it.each([
+  ['true', [{ ...todo, id: 2, completed: true }]],
+  ['false', [todo, { ...todo, id: 3 }]],
+])('filters tasks with completed=%s', async (value, expected) => {
+  const { app, repository } = setup();
+  repository.list.mockResolvedValueOnce([todo, { ...todo, id: 2, completed: true }, { ...todo, id: 3 }]);
+  const response = await request(app).get(`/api/todos?completed=${value}`);
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual(expected);
+  expect(repository.list).toHaveBeenCalledOnce();
+});
+it('returns all tasks, completed or not, when no completed filter is given', async () => {
+  const { app, repository } = setup();
+  const done = { ...todo, id: 2, completed: true };
+  repository.list.mockResolvedValueOnce([todo, done]);
+  const response = await request(app).get('/api/todos');
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual([todo, done]);
+});
+it('returns an empty list when no task matches the completed filter', async () => {
+  const { app } = setup();
+  const response = await request(app).get('/api/todos?completed=true');
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual([]);
+});
+it.each(['yes', 'TRUE', '1', '', 'true&completed=false'])('rejects invalid completed filter %j without calling the repository', async (value) => {
+  const { app, repository } = setup();
+  const response = await request(app).get(`/api/todos?completed=${value}`);
+  expect(response.status).toBe(422);
+  expect(response.body).toEqual({ detail: 'completed must be true or false.' });
+  expect(repository.list).not.toHaveBeenCalled();
+});
 it('creates tasks with trimmed input and defaults', async () => {
   const { app, repository } = setup();
   const response = await request(app).post('/api/todos').send({ title: '  Plan the sprint  ', priority: 'high' });
