@@ -13,7 +13,14 @@ export function createTodosRouter(repository: TodoStore) {
     res.locals.todoId = result.data;
     next();
   });
-  router.get('/', async (req, res) => res.json(await repository.list()));
+  router.get('/', async (req, res) => {
+    const { completed } = req.query;
+    if (completed !== undefined && completed !== 'true' && completed !== 'false') {
+      return res.status(422).json({ detail: 'completed must be true or false.' });
+    }
+    const todos = await repository.list();
+    res.json(completed === undefined ? todos : todos.filter((todo) => todo.completed === (completed === 'true')));
+  });
   router.post('/', async (req, res) => {
     const result = createSchema.safeParse(req.body);
     if (!result.success) return res.status(422).json({ detail: result.error.issues });
