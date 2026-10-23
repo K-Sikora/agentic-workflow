@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  classifySource, formatRanges, isTestFile, mapTests, parseArgs, parseChangedLines, safeEnv, summarizeVitest, toRanges, uncoveredLines,
+  classifySource, formatBranches, formatRanges, isTestFile, mapTests, parseArgs, parseChangedLines, safeEnv, summarizeVitest, toRanges,
+  uncoveredBranches, uncoveredLines,
 } from './lib.mjs';
 
 test('only test files and test support are writable', () => {
@@ -53,6 +54,24 @@ test('lists uncovered lines the way istanbul counts line coverage', () => {
   const lines = uncoveredLines(coverage);
   assert.deepEqual(lines, [3, 4]);
   assert.equal(formatRanges(toRanges(lines)), '3-4');
+});
+
+test('lists conditions with a path that never ran', () => {
+  const coverage = {
+    b: { 0: [3, 0], 1: [2, 1], 2: [0, 0, 4] },
+    branchMap: {
+      0: { type: 'cond-expr', loc: { start: { line: 12 } } },
+      1: { type: 'if', loc: { start: { line: 5 } } },
+      2: { type: 'switch', loc: { start: { line: 8 } } },
+    },
+  };
+  const branches = uncoveredBranches(coverage);
+  assert.deepEqual(branches, [
+    { line: 8, type: 'switch', missed: 2, paths: 3 },
+    { line: 12, type: 'cond-expr', missed: 1, paths: 2 },
+  ]);
+  assert.equal(formatBranches(branches), '8 (2/3 switch), 12 (1/2 cond-expr)');
+  assert.deepEqual(uncoveredBranches({ s: {}, statementMap: {} }), []);
 });
 
 test('summarizes vitest json results, including files that fail to load', () => {

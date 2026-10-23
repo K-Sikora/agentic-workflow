@@ -14,7 +14,9 @@ node tools/test-agent/analyze.mjs --base <base-sha> --coverage --markdown .test-
 node tools/test-agent/analyze.mjs --all --coverage --markdown .test-agent/analysis.md               # whole codebase
 ```
 
-For each file it gives: testable or not (and why), existing test files, changed lines, uncovered lines and line coverage. It also lists failing tests and test files the author changed. Trust these facts over guesses.
+For each file it gives: testable or not (and why), existing test files, changed lines, uncovered lines, missed branches (`line (missed/paths type)`, for example `41 (1/2 cond-expr)`), and line and branch coverage. It also lists failing tests and test files the author changed. Trust these facts over guesses.
+
+A file can have 100% lines and still miss branches: every line ran, but one side of a condition was never tested (a completed task, an overdue date, an error response). Missed branches are gaps like uncovered lines.
 
 ## 2. Understand the change (pull request mode)
 
@@ -26,7 +28,7 @@ For each file it gives: testable or not (and why), existing test files, changed 
 
 | Decision | When |
 |---|---|
-| `create` | A testable file has no tests, or changed or uncovered behavior has no assertions. |
+| `create` | A testable file has no tests, or changed or uncovered behavior has no assertions, including missed branches. |
 | `update` | An existing test asserts the old behavior and the diff plus the stated intent show the change is deliberate. |
 | `skip` | The analysis marks the file as not testable; the change has no behavior (renames, formatting, comments, types); or the changed lines are already covered **and** asserted by existing tests. |
 | `bug` | A test fails and the diff does not explain it, or the new code contradicts the stated intent, its types or its naming. Never change a test to match such code. |
@@ -36,7 +38,8 @@ Rules:
 - Failing tests listed in the analysis come first. Each one is either an `update` (deliberate change) or a `bug`.
 - Never rewrite tests the author changed in the pull request. You may add cases next to them.
 - Process wiring (`backend/src/main.ts`, `frontend/src/main.tsx`) is skipped. `lifespan.ts` and `factory.ts` are testable with mocks.
-- In `all` mode, order files by risk and gap size: data mapping, validation, request handling and state updates first, thin wrappers last. Respect any file limit in the task prompt.
+- In `all` mode, order files by risk and gap size: data mapping, validation, request handling and state updates first, thin wrappers last. Count missed branches in the gap, not only uncovered lines. Respect any file limit in the task prompt.
+- For a missed branch, add the case that takes the other path (for example render a completed and an overdue task) and assert what differs, rather than a test that only executes the line.
 
 ## 4. Write the plan down
 

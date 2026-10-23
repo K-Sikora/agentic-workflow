@@ -34,5 +34,5 @@ Rules:
 
 - Every number comes from `verify.json` or a test run you made. Never estimate or round up.
 - Use plain, short sentences. Name files and tests exactly.
-- In `all` mode replace "Fail on the code before the change" with line coverage before and after for each file you touched.
+- In `all` mode replace "Fail on the code before the change" with line and branch coverage before and after for each file you touched, measured with `npm --prefix <package> run test:coverage`.
 - If nothing needed tests, say so in one sentence and list the skipped files with reasons.

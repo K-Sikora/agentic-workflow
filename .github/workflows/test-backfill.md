@@ -115,5 +115,5 @@ Follow your agent instructions and skills. Run the gate as `node tools/test-agen
 Publishing:
 
 - Commit the tests with a message like `test(${{ github.event.inputs.package }}): cover <areas> (unit-test-agent)` and no trailers.
-- Call `create_pull_request` once. Title: `test(${{ github.event.inputs.package }}): raise unit test coverage`. Body: the report from the `test-report` skill in `all` mode, with line coverage before and after for every file you touched.
+- Call `create_pull_request` once. Title: `test(${{ github.event.inputs.package }}): raise unit test coverage`. Body: the report from the `test-report` skill in `all` mode, with line and branch coverage before and after for every file you touched.
 - If no file needed tests, call `noop` and say why.

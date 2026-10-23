@@ -107,6 +107,22 @@ export function uncoveredLines(fileCoverage) {
   return [...hits].filter(([, count]) => count === 0).map(([line]) => line).sort((a, b) => a - b);
 }
 
+// Conditions where at least one path never ran, e.g. the `false` side of `a ? b : c`.
+export function uncoveredBranches(fileCoverage) {
+  const missed = [];
+  for (const [id, counts] of Object.entries(fileCoverage.b ?? {})) {
+    const unseen = counts.filter((count) => count === 0).length;
+    if (!unseen) continue;
+    const branch = fileCoverage.branchMap[id];
+    missed.push({ line: branch.loc?.start?.line ?? branch.line, type: branch.type, missed: unseen, paths: counts.length });
+  }
+  return missed.sort((a, b) => a.line - b.line);
+}
+
+export function formatBranches(branches) {
+  return branches.map((b) => `${b.line} (${b.missed}/${b.paths} ${b.type})`).join(', ');
+}
+
 export function toRanges(lines) {
   const ranges = [];
   for (const line of lines) {

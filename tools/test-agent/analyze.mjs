@@ -5,8 +5,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  PACKAGES, classifySource, formatRanges, git, inRanges, isTestFile, listFiles, mapTests,
-  packageOf, parseArgs, parseChangedLines, readJson, summarizeVitest, toRanges, uncoveredLines, vitest,
+  PACKAGES, classifySource, formatBranches, formatRanges, git, inRanges, isTestFile, listFiles, mapTests,
+  packageOf, parseArgs, parseChangedLines, readJson, summarizeVitest, toRanges, uncoveredBranches, uncoveredLines, vitest,
 } from './lib.mjs';
 
 const args = parseArgs(process.argv.slice(2));
@@ -73,7 +73,7 @@ if (args.coverage) {
       coverage[path.relative(root, abs).replaceAll('\\', '/')] = data;
     }
     for (const [abs, data] of Object.entries(readJson(summaryFile))) {
-      summaries[abs === 'total' ? `${name}:total` : path.relative(root, abs).replaceAll('\\', '/')] = data.lines.pct;
+      summaries[abs === 'total' ? `${name}:total` : path.relative(root, abs).replaceAll('\\', '/')] = { lines: data.lines.pct, branches: data.branches.pct };
     }
   }
 }
@@ -86,19 +86,24 @@ const files = candidates.map(({ file, status }) => {
   item.changedLines = changed;
   if (args.coverage && !measured.has(item.package)) {
     item.lineCoverage = null;
+    item.branchCoverage = null;
     item.uncoveredLines = 'unknown (no coverage report)';
+    item.uncoveredBranches = 'unknown (no coverage report)';
   } else if (args.coverage) {
     const fileCoverage = coverage[file];
     const uncovered = fileCoverage ? uncoveredLines(fileCoverage) : null;
-    item.lineCoverage = summaries[file] ?? (fileCoverage ? null : 0);
+    item.lineCoverage = summaries[file]?.lines ?? (fileCoverage ? null : 0);
+    item.branchCoverage = summaries[file]?.branches ?? (fileCoverage ? null : 0);
     item.uncoveredLines = uncovered ? toRanges(changed ? uncovered.filter((l) => inRanges(l, changed)) : uncovered) : 'not loaded by any test';
+    // Every line can run while one side of a condition is never tested, so missed branches are a gap of their own.
+    item.uncoveredBranches = fileCoverage ? uncoveredBranches(fileCoverage).filter((b) => !changed || inRanges(b.line, changed)) : [];
   }
   return item;
 });
 
 const testable = files.filter((f) => f.testable);
 const failing = Object.values(baseline).reduce((sum, b) => sum + b.failed, 0);
-const needsWork = (f) => mode === 'pr' || !Array.isArray(f.uncoveredLines) || f.uncoveredLines.length > 0;
+const needsWork = (f) => mode === 'pr' || !Array.isArray(f.uncoveredLines) || f.uncoveredLines.length > 0 || f.uncoveredBranches?.length > 0;
 const result = {
   mode,
   base: args.base ?? null,
@@ -119,17 +124,21 @@ console.log(`analysis: ${result.summary.testable} testable of ${result.summary.f
 function toMarkdown(r) {
   const lines = [`## Test agent analysis (${r.mode === 'all' ? 'whole codebase' : `changes since ${r.mergeBase.slice(0, 7)}`})`, ''];
   for (const [name, b] of Object.entries(r.baseline)) {
-    lines.push(`- **${name}**: ${b.passed} passing, ${b.failed} failing, line coverage ${r.totals[name] ?? '?'}%`);
+    const total = r.totals[name];
+    lines.push(`- **${name}**: ${b.passed} passing, ${b.failed} failing, coverage ${total?.lines ?? '?'}% lines, ${total?.branches ?? '?'}% branches`);
     for (const f of b.failures.slice(0, 10)) lines.push(`  - failing: \`${path.basename(f.file)}\` ${f.test}: ${f.message}`);
   }
   if (r.changedTests.length) lines.push(`- Test files changed by the author: ${r.changedTests.map((t) => `\`${t}\``).join(', ')}`);
   const testable = r.files.filter((f) => f.testable);
   if (testable.length) {
-    lines.push('', '| File | Existing tests | Changed lines | Uncovered lines | Line coverage |', '|---|---|---|---|---|');
+    lines.push('', '| File | Existing tests | Changed lines | Uncovered lines | Missed branches (line, paths) | Lines / branches |', '|---|---|---|---|---|---|');
+    const pct = (value) => (value != null ? `${value}%` : '?');
     for (const f of testable) {
       const uncovered = Array.isArray(f.uncoveredLines) ? formatRanges(f.uncoveredLines) || 'none' : f.uncoveredLines ?? '';
+      const branches = Array.isArray(f.uncoveredBranches) ? formatBranches(f.uncoveredBranches) || 'none' : f.uncoveredBranches ?? '';
       const changed = f.changedLines ? formatRanges(f.changedLines) : 'all';
-      lines.push(`| \`${f.file}\` | ${f.tests.map((t) => `\`${path.basename(t)}\``).join(', ') || '-'} | ${changed} | ${uncovered} | ${f.lineCoverage != null ? `${f.lineCoverage}%` : ''} |`);
+      const coverage = f.lineCoverage !== undefined ? `${pct(f.lineCoverage)} / ${pct(f.branchCoverage)}` : '';
+      lines.push(`| \`${f.file}\` | ${f.tests.map((t) => `\`${path.basename(t)}\``).join(', ') || '-'} | ${changed} | ${uncovered} | ${branches} | ${coverage} |`);
     }
   }
   const skipped = Object.groupBy(r.files.filter((f) => !f.testable), (f) => f.skipReason);
