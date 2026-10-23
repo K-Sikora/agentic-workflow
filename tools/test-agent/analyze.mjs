@@ -50,19 +50,27 @@ const findTests = mapTests(Object.values(testFilesByPackage).flat(), (f) => read
 const baseline = {};
 const coverage = {};
 const summaries = {};
+const measured = new Set();
 if (args.coverage) {
   const touched = new Set(candidates.map((c) => packageOf(c.file)).filter(Boolean));
   for (const name of touched) {
     const dir = PACKAGES[name].dir;
     const resultsFile = path.resolve(outDir, `${name}-results.json`);
-    const run = vitest(dir, ['--coverage', '--coverage.reporter=json', '--coverage.reporter=json-summary', '--reporter=json', `--outputFile=${resultsFile}`]);
+    // Failing tests are an expected input here, so coverage must be written even when the run fails.
+    const run = vitest(dir, ['--coverage', '--coverage.reportOnFailure', '--coverage.reporter=json', '--coverage.reporter=json-summary', '--reporter=json', `--outputFile=${resultsFile}`]);
     if (!existsSync(resultsFile)) throw new Error(`Vitest produced no results for ${name}:\n${run.stderr}`);
     baseline[name] = summarizeVitest(readJson(resultsFile));
-    for (const [abs, data] of Object.entries(readJson(path.join(dir, 'coverage', 'coverage-final.json')))) {
+    const finalFile = path.join(dir, 'coverage', 'coverage-final.json');
+    const summaryFile = path.join(dir, 'coverage', 'coverage-summary.json');
+    if (!existsSync(finalFile) || !existsSync(summaryFile)) {
+      console.warn(`No coverage report for ${name}; continuing without coverage facts.`);
+      continue;
+    }
+    measured.add(name);
+    for (const [abs, data] of Object.entries(readJson(finalFile))) {
       coverage[path.relative(root, abs).replaceAll('\\', '/')] = data;
     }
-    const summary = readJson(path.join(dir, 'coverage', 'coverage-summary.json'));
-    for (const [abs, data] of Object.entries(summary)) {
+    for (const [abs, data] of Object.entries(readJson(summaryFile))) {
       summaries[abs === 'total' ? `${name}:total` : path.relative(root, abs).replaceAll('\\', '/')] = data.lines.pct;
     }
   }
@@ -74,7 +82,10 @@ const files = candidates.map(({ file, status }) => {
   if (!testable) return item;
   const changed = mode === 'all' ? null : parseChangedLines(git(['diff', '-U0', '-M', mergeBase, 'HEAD', '--', file]));
   item.changedLines = changed;
-  if (args.coverage) {
+  if (args.coverage && !measured.has(item.package)) {
+    item.lineCoverage = null;
+    item.uncoveredLines = 'unknown (no coverage report)';
+  } else if (args.coverage) {
     const fileCoverage = coverage[file];
     const uncovered = fileCoverage ? uncoveredLines(fileCoverage) : null;
     item.lineCoverage = summaries[file] ?? (fileCoverage ? null : 0);
@@ -85,7 +96,7 @@ const files = candidates.map(({ file, status }) => {
 
 const testable = files.filter((f) => f.testable);
 const failing = Object.values(baseline).reduce((sum, b) => sum + b.failed, 0);
-const needsWork = (f) => !args.coverage || f.uncoveredLines === 'not loaded by any test' || f.uncoveredLines.length > 0 || mode === 'pr';
+const needsWork = (f) => mode === 'pr' || !Array.isArray(f.uncoveredLines) || f.uncoveredLines.length > 0;
 const result = {
   mode,
   base: args.base ?? null,
