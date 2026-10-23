@@ -9,7 +9,7 @@ What it achieved on this repository:
 
 ## 1. Technical decisions
 
-**Agent runtime: GitHub Agentic Workflows (gh-aw).** The job offer mentions gh-aw, and its model fits an agent that runs on pull requests: the agent job has no write permissions, and every write (the commit, the comments) is a declared safe output that a separate job applies only after detection passes. Workflows are Markdown with frontmatter, and `gh aw compile` turns them into ordinary Actions files (`*.lock.yml`).
+**Agent runtime: GitHub Agentic Workflows (gh-aw).** gh-aw runs coding agents on repository events with the isolation a pull request agent needs: the agent job has no write permissions, and every write (the commit, the comments) is a declared safe output that a separate job applies only after detection passes. Workflows are Markdown with frontmatter, and `gh aw compile` turns them into ordinary Actions files (`*.lock.yml`).
 
 **Engine and model: Claude Code CLI with Claude Sonnet 5.5 via OpenRouter.** gh-aw's `claude` engine runs the Claude Code CLI as the agent harness. The agent and skills are standard Claude Code files in `.claude/`, so the same agent also runs in a local Claude Code session; the workflow selects it with `--agent unit-test-agent`. Sonnet 5.5 writes the tests and Haiku 5.5 runs the threat scan. Both are called through OpenRouter's Anthropic-compatible endpoint (`ANTHROPIC_BASE_URL`), so the provider is configuration: the model is set in one line, and removing two lines of `engine.env` switches the same workflow to the Anthropic API.
 
