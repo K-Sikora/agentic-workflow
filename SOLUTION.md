@@ -1,99 +1,57 @@
-# Solution: unit test agent and agentic PR workflow
+# Unit test agent for Taskly
 
-A custom agent with reusable skills writes and maintains unit tests for the Taskly backend and frontend. It runs on GitHub in two workflows: one on every pull request, one on demand to raise coverage across a package. Its work is verified independently before anything reaches the pull request.
+I built an agent with five skills that writes and updates unit tests for the Taskly backend and frontend. It runs in Claude Code on Claude Sonnet 5.5, served through OpenRouter, inside two GitHub workflows: one on every pull request and one on demand that fills coverage gaps in a package. Before anything is pushed or posted, a separate check repeats the agent's work and blocks the result if something is off.
 
-**Results**
+What it achieved on this repository:
 
-- Coverage of the existing code, written by the agent: backend 33.0% to 97.4% lines and 98.0% branches, frontend 47.7% to 100% lines and 99.3% branches (PRs [#1](https://github.com/K-Sikora/agentic-workflow/pull/1), [#2](https://github.com/K-Sikora/agentic-workflow/pull/2), [#3](https://github.com/K-Sikora/agentic-workflow/pull/3), [#7](https://github.com/K-Sikora/agentic-workflow/pull/7)).
-- Pull request runs cover four outcomes: tests created, existing tests updated for a deliberate change, a suspected bug reported instead of hidden, and a skip without starting the model (see [Example runs](#example-runs)).
-- The model proposes, deterministic code decides: every test change is re-checked by a gate that does not trust the agent.
+- Backend line coverage went from 33.0% to 97.4% (branches 33.3% to 98.0%), frontend from 47.7% to 100% (branches 43.8% to 99.3%). The agent wrote these tests in the backfill PRs [#1](https://github.com/K-Sikora/agentic-workflow/pull/1), [#2](https://github.com/K-Sikora/agentic-workflow/pull/2), [#3](https://github.com/K-Sikora/agentic-workflow/pull/3) and [#7](https://github.com/K-Sikora/agentic-workflow/pull/7), and I reviewed them before merging.
+- On pull requests it wrote tests for a new feature, repaired tests the feature had broken, flagged a bug instead of adjusting tests to it, and skipped a docs-only change without calling the model ([section 4](#4-example-runs)).
 
-## At a glance
+## 1. Technical decisions
 
-```
-pull request
-  |
-  |  1. Prepare (no model)       trusted tools from the base branch, npm ci, change analysis
-  |                              nothing testable, or the agent's own commit -> end here, no model call
-  v
-  2. Agent (sandboxed)           unit-test-agent + 5 skills, read-only token, network allowlist
-  |                              writes tests, runs them, self-checks with verify.mjs, drafts a report
-  v
-  3. Gate (fail closed)          fresh checkout + agent patch: path policy first, then in a container
-  |                              without network: typecheck, full suites, Prettier, repeated shuffled
-  |                              runs, new tests against the old code
-  v
-  4. Publish                     push tests to the PR branch, agent report comment,
-                                 measured verification comment (separate workflow on main)
-```
+**GitHub Agentic Workflows.** The job offer mentions gh-aw, and it covers the hardest part of running an agent on pull requests: the agent itself cannot write anything. Every write, the commit and the comments, is a declared output that a separate job applies only after the checks pass. Workflows are Markdown with frontmatter, and `gh aw compile` turns them into ordinary Actions files (`*.lock.yml`).
 
-## Where things live
+**Claude Sonnet 5.5 through OpenRouter, in Claude Code.** gh-aw's `claude` engine runs the Claude Code CLI as the agent harness, and the agent and skills are plain Claude Code files in `.claude/`, so the same agent also works in a local Claude Code session. The workflow starts it with `--agent unit-test-agent`. Sonnet 5.5 writes the tests and Haiku 5.5 runs the threat scan, both served by OpenRouter through its Anthropic-compatible endpoint. This keeps the provider a configuration detail: the model is one line in the workflow, and removing two lines of `engine.env` points the same setup at Anthropic directly.
 
-| Path | What it is |
-|---|---|
-| `.claude/agents/unit-test-agent.md` | The custom agent: role, hard rules, inputs, procedure |
-| `.claude/skills/test-triage/` | Decide create, update, skip or bug per changed file |
-| `.claude/skills/backend-unit-tests/` | Backend conventions from this repo: flat `tests/`, Prisma without a database, supertest, env and process code |
-| `.claude/skills/frontend-unit-tests/` | Frontend conventions: colocated tests, design-system mocks, TanStack Query hooks, `fetch`, Prettier |
-| `.claude/skills/test-verification/` | Fix loop (max 3 attempts), the gate, "does the test detect the change", quality checklist |
-| `.claude/skills/test-report/` | Report format for the PR comment or PR body |
-| `.claude/settings.json` | Keeps agent commits free of tool attribution trailers |
-| `tools/test-agent/analyze.mjs` | Facts for the agent: testable files, existing tests (import graph, ignoring `vi.mock`), changed lines, uncovered lines, missed branches, failing tests |
-| `tools/test-agent/verify.mjs` | The gate, also used by the agent as a self-check |
-| `tools/test-agent/gate.sh`, `install.sh` | Gate entry point in CI (network-less container); dependency install without lifecycle scripts, with one retry |
-| `.github/zizmor/requirements.txt` | Hash-pinned workflow security scanner used by CI |
-| `tools/test-agent/lib.test.mjs` | Tests for the tooling (`node --test`), run in CI |
-| `.github/workflows/unit-test-agent.md` | gh-aw workflow for pull requests (source; `.lock.yml` is the compiled Actions file) |
-| `.github/workflows/test-backfill.md` | gh-aw workflow that covers one package and opens a PR |
-| `.github/workflows/unit-test-agent-report.yml` | Posts the gate's measured result on the PR |
-| `.github/workflows/ci.yml` | Plain CI: typecheck, Prettier, tests with coverage, tooling tests, workflow security scan |
-| `.github/workflows/smoke-openrouter.md` | Manual check that the model provider is reachable |
+**Scripts for facts, the model for judgment.** A small Node tool without dependencies (`tools/test-agent`) works out everything that has one correct answer: which source files changed, whether the coverage config counts them, which tests import them, which changed lines and conditions are not covered, and which tests already fail. The agent reads that and decides what is worth testing. Branch data came later: the first backfill left `TodoItem.tsx` at 100% lines but 36% branches, because every line ran in one test while most of its conditions never changed value.
 
-The agent and skills use the standard Claude Code format, so the same files run in CI and in a local Claude Code session.
+**A check that does not trust the agent.** `verify.mjs` runs on a fresh checkout with the agent's patch applied. It runs the typecheck, both suites, Prettier and three shuffled runs of the new tests, and it runs the new tests against the code from before the change. If anything fails, nothing is published. The agent calls the same script as a self-check, so it usually knows the outcome before the gate does.
 
-## Main technical decisions
+**New tests have to notice the change.** Coverage only shows that code ran. For each new test file the check counts how many tests fail on the previous version of the code, and the verification skill asks the agent to tighten assertions when a test for new behavior passes on both.
 
-- **GitHub Agentic Workflows (gh-aw) with the Claude Code engine.** gh-aw gives the security model an agent on pull requests needs: the agent job has a read-only token and a network allowlist, the model key stays in a proxy outside the agent container, and every write goes through typed safe outputs applied by a separate job. The workflow is Markdown plus frontmatter, compiled to a normal Actions file.
-- **Native Claude Code agent and skills.** The workflow starts Claude Code with `--agent unit-test-agent`; skills in `.claude/skills/` are discovered and loaded on demand. On pull requests gh-aw restores `.claude/` from the base branch, so a PR cannot rewrite the agent's instructions.
-- **Model through OpenRouter.** `ANTHROPIC_BASE_URL` points the engine at OpenRouter's Anthropic-compatible API and `ANTHROPIC_API_KEY` is mapped from the `OPENROUTER_API_KEY` secret. Sonnet 5.5 writes tests; Haiku 5.5 runs gh-aw's threat detection. Removing the two `engine.env` lines switches to Anthropic directly.
-- **Deterministic facts, model judgment.** Everything with a correct answer is computed by scripts: which files changed, which are testable (mirroring the coverage config), which tests import them, which changed lines and which conditions are not covered, which tests already fail. Missed branches matter on their own: a file can run every line while one side of a condition is never tested. The model decides what is worth testing and how, and writes the tests.
-- **Independent gate, fail closed.** `verify.mjs` runs on a fresh checkout with the agent's patch, from the base branch's copy of the tools. It refuses any change outside test files before installing anything, then, in a container without network access, runs typecheck, the full suites, Prettier and three shuffled runs of the new tests. If any check fails, gh-aw applies no safe output: nothing is pushed and no comment is posted.
-- **Tests must detect the change.** The gate also runs the new tests against the code before the change in a temporary worktree. Tests for new behavior should fail there; the skill tells the agent to strengthen assertions when they do not. The result is reported per test file.
-- **Bugs are reported, not encoded.** If the code contradicts the stated intent, the agent leaves the tests alone and explains the suspected bug with file and line.
-- **No model call when there is nothing to do.** A docs-only change, or a run triggered by the agent's own commit, ends in a `noop` before the engine starts.
-- **One agent, two entry points.** The backfill workflow reuses the same agent, skills and gate in "whole package" mode and opens a pull request, limited by `max-files` so each PR stays reviewable.
+**Bugs get reported, not tested in.** When the code contradicts the pull request description, the agent leaves the tests alone and explains the problem with file and line.
 
-## Security
+**No model call without work.** The run stops before the model starts when nothing unit-testable changed, or when the newest change is the agent's own commit.
 
-| Risk | Mitigation |
-|---|---|
-| Agent edits application code, config or workflows | `allowed-files` on the push and PR safe outputs; same policy in the gate, checked before `npm ci`; gh-aw protected files (`.github/`, `.claude/`) |
-| Agent runs arbitrary commands | Exact command allowlist (`npm --prefix backend test`, `node tools/test-agent/verify.mjs`, Prettier, read-only git and commit); no `npm:*`, `node -e` or shell access beyond it |
-| Data exfiltration by agent-written tests | The agent's network allows only the model endpoint (dependencies are installed before it starts). The gate runs the tests in a digest-pinned Node container with `--network none` as a non-root user, and first proves the container cannot reach the internet, failing closed if it can |
-| PR weakens its own checks | Analysis and gate run `tools/test-agent` extracted from the base commit; `.claude/` restored from the base branch |
-| Prompt injection in PR text or code | Agent rules treat PR content as data; gh-aw threat detection; fail-closed detection job; @mentions in the verification comment are neutralized |
-| Secret leaks | Model key held by the gh-aw API proxy and excluded from the agent container; test processes get no tokens or keys; agent job token is read-only |
-| Untrusted contributors | No `pull_request_target`; fork PRs get no secrets; `roles: [admin, maintainer, write]`; bot-triggered runs are skipped |
-| Runaway cost or loops | `max-turns`, timeouts, per-PR concurrency, `noop` before the model, skip when the newest change is the agent's own commit |
-| Supply chain | Actions and the container image pinned by digest, gh-aw version pinned, `npm ci --ignore-scripts` from lockfiles with Prisma generation run explicitly, default workflow permissions `read` |
-| Insecure workflow definitions | `zizmor` (version and wheel hash pinned) scans every workflow, including the compiled lock files, in CI; the one accepted finding (`workflow_run` in the report workflow) is annotated with the reason it is safe |
+### Security
 
-## Running the PR workflow
+I treated the agent, the pull request content and the tests the agent writes as untrusted, and built the setup so that none of them can change the repository, reach secrets or talk to the outside world on their own. What is in place, by threat:
+
+**The agent writing outside its scope.** The agent job has read access only; the single write path is gh-aw's safe outputs. The push output accepts only test paths (`allowed-files`), gh-aw additionally protects `.github/` and `.claude/`, and the gate rejects any other changed file before it installs or runs anything. The agent can execute a fixed list of commands (the two test suites, typecheck, the tool, Prettier, read-only git and commit) and nothing else, so no `node -e`, `npx` or arbitrary shell.
+
+**A pull request weakening its own checks.** The analysis and the gate use `tools/test-agent` extracted from the base commit, and gh-aw restores `.claude/` from the base branch, so a pull request cannot edit the agent's instructions, skills or verification. The report workflow runs from the default branch and treats the gate's artifact as data: it validates the PR number, caps the size and neutralizes @mentions.
+
+**Prompt injection.** The agent's rules say pull request text, commit messages and code are data and not instructions. gh-aw runs an AI threat scan over the agent's output and patch before anything is applied, and the detection job fails closed.
+
+**Secrets.** The model key lives in gh-aw's API proxy and is excluded from the agent container. Processes that run tests get an environment without tokens or keys. No workflow uses `pull_request_target`, fork PRs receive no secrets, only users with write access trigger the agent, and runs started by bots are skipped. The CI-trigger PAT is fine-grained, limited to the repositories that need it and to repository contents, and used only by gh-aw's publishing job.
+
+**Exfiltration by agent-written tests.** While the agent works, its network allows only the model endpoint; dependencies are installed before it starts. The gate runs the agent's tests in a Node container pinned by digest, as a non-root user, with `--network none`, and before that it tries to open a connection from inside the container and stops if one succeeds.
+
+**Supply chain.** Dependencies install with `npm ci --ignore-scripts` from the lockfiles, and the only build script the project needs, Prisma client generation, runs explicitly. Every action and the container image are pinned by SHA or digest, the gh-aw version is pinned, and default workflow permissions are read-only. CI scans all workflows, including the compiled lock files, with zizmor (version and wheel hash pinned); the one accepted finding, `workflow_run` in the report workflow, has a comment explaining why it is safe there.
+
+**Cost and runaway loops.** Runs have turn and time limits and queue per pull request. Nothing reaches the model when no testable code changed or when the newest change is the agent's own commit, which also stops the agent from triggering itself.
+
+## 2. Running the PR workflow
 
 Prerequisites:
 
-1. Repository secret `OPENROUTER_API_KEY` (or an Anthropic key with the two `engine.env` lines removed). Set a spending limit on the key.
-2. Optional but recommended: secret `GH_AW_CI_TRIGGER_TOKEN`, a fine-grained PAT for this repository with Contents read and write. Commits and PRs created with the default `GITHUB_TOKEN` do not start other workflows; with this token gh-aw adds an empty commit so CI runs on the agent's changes.
-3. For the backfill workflow: Settings, Actions, General, "Allow GitHub Actions to create and approve pull requests". Workflow permissions stay "Read".
+1. A repository secret `OPENROUTER_API_KEY` with a spending limit, or an Anthropic key with the `ANTHROPIC_BASE_URL` line removed from the workflows.
+2. Recommended: `GH_AW_CI_TRIGGER_TOKEN`, a fine-grained PAT with Contents read and write. GitHub does not start workflows for commits pushed with the default token, so without it CI on the agent's commit waits for manual approval.
+3. For backfill: "Allow GitHub Actions to create and approve pull requests" in the repository's Actions settings. Default workflow permissions stay read-only.
 
-Usage:
+Then open or update a non-draft pull request that touches `backend/` or `frontend/`; the label `skip-test-agent` turns the agent off for it. To fill gaps, start "Unit test backfill" from the Actions tab and choose a package. "Smoke test (OpenRouter)" checks that the model is reachable. After editing a workflow, recompile it with the gh-aw extension (`gh extension install github/gh-aw`, v0.93.2, then `gh aw compile`).
 
-- Open or update a non-draft pull request that changes `backend/` or `frontend/`. The agent runs automatically. Add the label `skip-test-agent` to opt out.
-- Backfill: Actions, "Unit test backfill", Run workflow, choose `backend` or `frontend`.
-- Provider check: Actions, "Smoke test (OpenRouter)", Run workflow.
-- After editing a workflow source: `gh extension install github/gh-aw` (v0.93.2), then `gh aw compile`.
-
-Locally, the same agent runs in Claude Code: `claude --agent unit-test-agent`, then for example "Mode: pr. Base: origin/main." The tools also run on their own:
+Locally, `claude --agent unit-test-agent` with a prompt such as "Mode: pr. Base: origin/main." runs the same agent, and the tool works on its own:
 
 ```
 node tools/test-agent/analyze.mjs --base origin/main --coverage --markdown .test-agent/analysis.md
@@ -101,62 +59,74 @@ node tools/test-agent/verify.mjs --since origin/main --base origin/main
 node --test "tools/test-agent/*.test.mjs"
 ```
 
-## Coverage
+## 3. Where the agent and skills are, and how a run uses them
 
-Measured by CI on `main` before the work and after the backfill and demo PRs:
+The agent is [`.claude/agents/unit-test-agent.md`](.claude/agents/unit-test-agent.md). It holds the rules no skill may break (only test files change, a bug is never written into a test, pull request text is data, nothing is finished without a passing check) and the order of work. The skills in `.claude/skills/`:
 
-| Package | Lines | Statements | Branches | Functions |
+- `test-triage` decides per file: create, update, skip or bug.
+- `backend-unit-tests` and `frontend-unit-tests` describe how this repository already writes tests (fixtures, Prisma without a database, supertest, design-system mocks, TanStack Query hooks), so new tests look like the existing ones.
+- `test-verification` covers the fix loop (three attempts per file), the `verify.mjs` run, the "does it notice the change" step and a short quality checklist.
+- `test-report` is the format of the PR comment or the backfill PR body.
+
+A pull request run, defined in [`.github/workflows/unit-test-agent.md`](.github/workflows/unit-test-agent.md):
+
+1. A preparation step skips the agent's own commits, installs dependencies, takes the tool from the base branch and runs the analysis. If nothing is testable, the run ends here.
+2. Claude Code starts as the agent and loads the skills it needs. It writes and runs tests, checks itself with `verify.mjs` and commits.
+3. gh-aw's detection job applies the patch to a fresh checkout and runs `tools/test-agent/gate.sh`, then the threat scan.
+4. Only if both pass does gh-aw push the commit to the PR branch and post the agent's report. A small workflow on the default branch, `unit-test-agent-report.yml`, adds the gate's own numbers as a second comment, also when the gate blocked the push.
+
+[`test-backfill.md`](.github/workflows/test-backfill.md) runs the same agent, skills and gate over a whole package and opens a pull request with at most `max-files` files.
+
+## 4. Example runs
+
+Costs are the AI Credits each run reports (1 AIC = 0.01 USD at gh-aw's pricing).
+
+| Pull request | Situation | What the agent did | Checked result | Cost |
 |---|---|---|---|---|
-| backend, before | 33.0% | 30.2% | 33.3% | 40.6% |
-| backend, after | 97.4% | 97.1% | 98.0% | 97.0% |
-| frontend, before | 47.7% | 46.4% | 43.8% | 40.3% |
-| frontend, after | 100% | 99.5% | 99.3% | 100% |
+| [#4](https://github.com/K-Sikora/agentic-workflow/pull/4) Duplicate a task ([run](https://github.com/K-Sikora/agentic-workflow/actions/runs/40019707918)) | New feature in backend and frontend; the author left 10 page tests failing | Tests for the route, API client, hook, button and list; mocked the new hook in `TodosPage.test.tsx` without changing its assertions | 98 backend and 123 frontend tests pass, stable over 3 runs; 7 of 25 router tests fail on the previous code | ~51 AIC |
+| [#5](https://github.com/K-Sikora/agentic-workflow/pull/5) Allow longer task descriptions ([run](https://github.com/K-Sikora/agentic-workflow/actions/runs/40019804664)) | Description says 5000 characters, the code says 500 | No test changes; reported the likely typo at `validators.ts:5`, why the existing test fails and what to change | Nothing to verify; CI stays red on the existing test, as it should. Closed without merging | ~8 AIC |
+| [#6](https://github.com/K-Sikora/agentic-workflow/pull/6) Describe the health check response ([run](https://github.com/K-Sikora/agentic-workflow/actions/runs/40019815832)) | Documentation only | Nothing; the analysis found no testable change and the model never started | No comment, no commit | <1 AIC |
+| [#8](https://github.com/K-Sikora/agentic-workflow/pull/8) Filter tasks by completion status ([run](https://github.com/K-Sikora/agentic-workflow/actions/runs/40034872839)) | New query filter, the first run after the security hardening | Tests for both filter values, an empty result and invalid values (9 cases); no bug found | 107 backend tests pass; 8 of 34 router tests fail on the previous code; the checks ran in the container without network. The first attempt stopped when the provider refused a request for lack of credits, and nothing was published | ~26 AIC |
+| #1, #2, #3, #7 backfill | Gaps in existing code, one package per run; #7 aimed at missed branches | Covered the riskiest files first, up to `max-files`; skipped guards the UI cannot reach and said why | Each passed the gate; coverage below | ~51, ~66, ~55, ~40 AIC |
 
-The only uncovered backend lines are in `src/main.ts` (process entry point, skipped on purpose). Most remaining branches are defensive guards the agent chose not to force, for example `if (pending) return` in `DeleteTodoDialog.tsx`, which the UI cannot reach because the buttons are disabled while a delete is pending.
+A typical pull request ends up with the agent's commit, its report (a decision and reason per file, the tests added, how many fail on the previous code) and a second comment with the gate's measurements.
 
-Branch coverage was a second step. After the first backfills the frontend had 100% lines but 92% branches: `TodoItem.tsx` ran every line in one test while most of its conditions (completed, overdue, with description) were never checked. The analysis now reports missed branches as well, and one more run ([#7](https://github.com/K-Sikora/agentic-workflow/pull/7)) took frontend branches from 92.4% to 99.3%.
+Coverage, measured by CI on `main`:
 
-## Example runs
-
-Costs are gh-aw AI Credits as reported by each run (1 AIC = 0.01 USD at gh-aw's pricing weights).
-
-| Pull request | What it shows | Agent decision and skills used | Verified result | Cost |
+| | Lines | Branches | Statements | Functions |
 |---|---|---|---|---|
-| [#4 Duplicate a task](https://github.com/K-Sikora/agentic-workflow/pull/4) ([run](https://github.com/K-Sikora/agentic-workflow/actions/runs/40019707918)) | New feature across backend and frontend; the author left 10 page tests broken | `create` for the route, API client, hook, button and list; `update` for `TodosPage.test.tsx` (mock for the new hook). Skills: triage, backend, frontend, verification, report | Gate ok: backend 98, frontend 123 tests, typecheck, Prettier, 3 stable runs. New tests fail on the old code (for example 7 of 25 in `router.test.ts`) | ~51 AIC |
-| [#5 Allow longer task descriptions](https://github.com/K-Sikora/agentic-workflow/pull/5) ([run](https://github.com/K-Sikora/agentic-workflow/actions/runs/40019804664)) | Code contradicts the description: limit set to 500 instead of 5000 | `bug`: no test changes; points to `validators.ts:5`, explains why the existing test fails and what to change. Skills: triage, report | No patch, so nothing to verify. CI is red on the existing test, which is the intended signal; the PR was closed without merging | ~8 AIC |
-| [#6 Describe the health check response](https://github.com/K-Sikora/agentic-workflow/pull/6) ([run](https://github.com/K-Sikora/agentic-workflow/actions/runs/40019815832)) | Documentation only | Analysis finds nothing unit-testable; the run ends with `noop` before the agent starts | No comment, no commit | <1 AIC (threat detection only) |
-| [#1](https://github.com/K-Sikora/agentic-workflow/pull/1), [#2](https://github.com/K-Sikora/agentic-workflow/pull/2), [#3](https://github.com/K-Sikora/agentic-workflow/pull/3), [#7](https://github.com/K-Sikora/agentic-workflow/pull/7) backfill | Coverage of existing code, one package per run; #7 targets missed branches | `create` and `update` over the files with the largest gaps, up to `max-files`, highest risk first; guards unreachable from the UI are skipped with a reason | Gate ok on each; coverage in the table above | ~51, ~66, ~55, ~40 AIC |
+| Backend before / after | 33.0% / 97.4% | 33.3% / 98.0% | 30.2% / 97.1% | 40.6% / 97.0% |
+| Frontend before / after | 47.7% / 100% | 43.8% / 99.3% | 46.4% / 99.5% | 40.3% / 100% |
 
-What a run looks like on the PR (#4):
+The backend lines still uncovered are `src/main.ts`, the process entry point. Most remaining branches are defensive guards the agent chose not to force, such as `if (pending) return` in `DeleteTodoDialog.tsx`, which the UI cannot reach while the buttons are disabled.
 
-1. The agent pushes `test: cover duplicating a task (unit-test-agent)` to the PR branch.
-2. Its report comment lists every decision with a reason, the tests per file, and which of them fail on the old code.
-3. The "Unit test agent report" workflow adds a second comment with the gate's own measurements, so reviewers do not have to trust the agent's numbers.
-4. With `GH_AW_CI_TRIGGER_TOKEN` set, an empty `ci: trigger checks` commit starts CI on the agent's changes. The agent run it triggers stops before the model because the newest change is the agent's own commit.
+Problems I ran into, all found on a private copy of the repository where I tried every scenario first:
 
-During development the same scenarios were run on a private copy of the repository first; issues found there (coverage missing when a PR has failing tests, a cancelled publish when the CI-trigger commit started a new run, transient `npm ci` network errors) are fixed in the workflow and tools.
+- The analysis crashed on pull requests with failing tests, because Vitest skips the coverage report when a test fails. It now asks for the report anyway.
+- With CI triggering on, the empty commit started a new agent run that cancelled the one still publishing. Runs for the same PR now queue.
+- A network error in `npm ci` failed a run that had nothing to do. The skip now comes before installing, and installs retry once.
+- On Windows, deleting the temporary worktree for the "previous code" check also deleted the real `node_modules` through a link. The links are removed first now.
 
-## Assumptions
+## 5. Assumptions
 
-- Contributors are trusted collaborators; fork PRs are out of scope for the agent (they still get normal CI).
-- "Unit test" means Vitest tests with mocked IO: no PostgreSQL, no network, as in the existing tests.
-- Files excluded from coverage by the project config (design system, types, generated Prisma client, entry points) are not targets.
-- The agent may extend existing tests but does not rewrite tests a person wrote, except for assertions on behavior the PR deliberately changed.
+- Pull requests come from collaborators. Fork PRs get normal CI but not the agent.
+- A unit test here means Vitest with mocked IO and no PostgreSQL or network, like the tests already in the repository.
+- Files the coverage config excludes (design system, types, generated Prisma client, entry points) are not targets.
+- The agent may add to tests people wrote, but changes their assertions only when the pull request deliberately changed that behavior.
 
-## Limitations
+## 6. Limitations
 
-- The agent is not deterministic: two runs on the same change can write different tests. The gate guarantees they pass, are stable and touch only test files; it cannot guarantee they are the best tests.
-- "Fails on the old code" is a strong signal but not mutation testing. A test file that cannot load on the old code counts as detecting the change.
-- Without `GH_AW_CI_TRIGGER_TOKEN`, CI on the agent's own commit waits for manual approval.
-- The gate checks the new tests with three shuffled runs, which catches common flakiness but not every timing issue.
-- The change analysis and normal CI run the author's own code and tests on the runner, as any CI does; only the agent's tests are isolated. The design protects against the agent and against prompt injection, not against a malicious collaborator.
-- OpenRouter is an extra party that sees the code sent to the model.
+- Two runs on the same change can produce different tests. The gate guarantees they pass, stay stable over three shuffled runs and touch only test files, not that they are the best possible tests.
+- "Fails on the previous code" is a useful signal but not mutation testing, and a test file that cannot load on the previous code counts as noticing the change.
+- The analysis and normal CI run the author's own code on the runner, as any CI does; only the agent's tests are isolated. The setup protects against the agent and prompt injection, not against a malicious collaborator.
+- Without `GH_AW_CI_TRIGGER_TOKEN`, CI on the agent's commit needs a manual approval.
+- OpenRouter is one more party that sees the code sent to the model.
 
-## For production
+## 7. What I would change for production
 
-- Call the model provider directly (Anthropic or Azure) instead of through OpenRouter, with organization-level budgets.
-- Add a small evaluation set of recorded changes with known correct decisions and track decision accuracy, detection rate and cost per run over time.
-- Mutation testing on changed lines (for example Stryker) to measure test strength beyond "fails on the old code".
-- Run the change analysis in the same network-less container as the gate, and pre-build the container image with dependencies to avoid installing in the job.
-- Coverage thresholds per package in Vitest config, raised after each backfill, so coverage cannot drop.
-- A GitHub App instead of a PAT for the CI trigger, and a required-reviewer environment for the agent secret.
+- Call Anthropic or Azure directly instead of OpenRouter, with budgets set per organization.
+- Keep a small set of recorded changes with known right answers and track decision accuracy, the share of tests that notice the change, and cost per run.
+- Add mutation testing on changed lines (for example Stryker) to measure test strength more precisely.
+- Run the change analysis in the same network-less container as the gate, with dependencies baked into the image.
+- Set coverage thresholds per package in the Vitest config and raise them after each backfill.
+- Use a GitHub App instead of a PAT for triggering CI, and keep the model key in an environment with required reviewers.
