@@ -80,3 +80,45 @@ it('deletes a task and returns 404 for a missing task', async () => {
   expect(missing.status).toBe(404);
   expect(missing.body).toEqual({ detail: 'Task not found.' });
 });
+it('duplicates a task as an active copy with a copy suffix', async () => {
+  const { app, repository } = setup();
+  const copy = { ...todo, id: 2, title: 'Plan the sprint (copy)' };
+  repository.get.mockResolvedValueOnce({ ...todo, completed: true });
+  repository.create.mockResolvedValueOnce(copy);
+  const response = await request(app).post('/api/todos/1/duplicate');
+  expect(response.status).toBe(201);
+  expect(response.body).toEqual(copy);
+  expect(repository.get).toHaveBeenCalledWith(1);
+  expect(repository.create).toHaveBeenCalledWith({
+    title: 'Plan the sprint (copy)', description: todo.description, priority: todo.priority, due_date: todo.due_date, completed: false,
+  });
+});
+it('keeps the duplicate title within 120 characters', async () => {
+  const { app, repository } = setup();
+  repository.get.mockResolvedValueOnce({ ...todo, title: 'x'.repeat(120) });
+  await request(app).post('/api/todos/1/duplicate');
+  const title = repository.create.mock.calls[0][0].title;
+  expect(title).toBe(`${'x'.repeat(113)} (copy)`);
+  expect(title).toHaveLength(120);
+});
+it('does not shorten a title that already fits with the suffix', async () => {
+  const { app, repository } = setup();
+  repository.get.mockResolvedValueOnce({ ...todo, title: 'x'.repeat(113) });
+  await request(app).post('/api/todos/1/duplicate');
+  expect(repository.create.mock.calls[0][0].title).toBe(`${'x'.repeat(113)} (copy)`);
+});
+it('returns 404 when duplicating a missing task and creates nothing', async () => {
+  const { app, repository } = setup();
+  repository.get.mockResolvedValueOnce(null);
+  const response = await request(app).post('/api/todos/2/duplicate');
+  expect(response.status).toBe(404);
+  expect(response.body).toEqual({ detail: 'Task not found.' });
+  expect(repository.get).toHaveBeenCalledWith(2);
+  expect(repository.create).not.toHaveBeenCalled();
+});
+it.each(['abc', '0', '-1'])('rejects duplicating invalid task ID %s without calling the repository', async (id) => {
+  const { app, repository } = setup();
+  expect((await request(app).post(`/api/todos/${id}/duplicate`)).status).toBe(422);
+  expect(repository.get).not.toHaveBeenCalled();
+  expect(repository.create).not.toHaveBeenCalled();
+});

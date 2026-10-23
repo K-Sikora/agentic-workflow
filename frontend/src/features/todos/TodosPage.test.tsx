@@ -1,7 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
 import { useNotice } from '../../hooks/useNotice'
+import { useDuplicateTodoMutation } from './hooks/useDuplicateTodoMutation'
 import { useTodoFilters } from './hooks/useTodoFilters'
 import { useTodosBusy } from './hooks/useTodosBusy'
 import { useTodosQuery } from './hooks/useTodosQuery'
@@ -12,6 +13,9 @@ import type { Todo } from './types'
 
 vi.mock('../../design-system', () => import('../../design-system/mocks'))
 vi.mock('../../hooks/useNotice', () => ({ useNotice: vi.fn() }))
+vi.mock('./hooks/useDuplicateTodoMutation', () => ({
+  useDuplicateTodoMutation: vi.fn(),
+}))
 vi.mock('./hooks/useTodoFilters', () => ({ useTodoFilters: vi.fn() }))
 vi.mock('./hooks/useTodosBusy', () => ({ useTodosBusy: vi.fn() }))
 vi.mock('./hooks/useTodosQuery', () => ({ useTodosQuery: vi.fn() }))
@@ -46,6 +50,7 @@ vi.mock('./components/TodoList', () => ({
     onToggle,
     onEdit,
     onDelete,
+    onDuplicate,
   }: {
     todos: Todo[]
     busy: boolean
@@ -56,6 +61,7 @@ vi.mock('./components/TodoList', () => ({
     onToggle: (todo: Todo) => void
     onEdit: (todo: Todo) => void
     onDelete: (todo: Todo) => void
+    onDuplicate: (todo: Todo) => void
   }) => (
     <>
       <p>Task list</p>
@@ -66,6 +72,9 @@ vi.mock('./components/TodoList', () => ({
           <button onClick={() => onToggle(todo)}>Toggle {todo.title}</button>
           <button onClick={() => onEdit(todo)}>Edit {todo.title}</button>
           <button onClick={() => onDelete(todo)}>Delete {todo.title}</button>
+          <button onClick={() => onDuplicate(todo)}>
+            Duplicate {todo.title}
+          </button>
         </div>
       ))}
     </>
@@ -107,6 +116,20 @@ vi.mock('./components/DeleteTodoDialog', () => ({
   ),
 }))
 vi.mock('../../components/SuccessNotice', () => ({ SuccessNotice: () => null }))
+
+function mockDuplicate({
+  mutateAsync = vi.fn(),
+  error = null as Error | null,
+  reset = vi.fn(),
+} = {}) {
+  vi.mocked(useDuplicateTodoMutation).mockReturnValue({
+    error,
+    reset,
+    mutateAsync,
+  } as unknown as ReturnType<typeof useDuplicateTodoMutation>)
+}
+
+beforeEach(() => mockDuplicate())
 
 function setup({
   todos = [] as Todo[],
@@ -250,6 +273,59 @@ it('prefers the mutation error over the query error', () => {
     query: { isError: true, error: new Error('Query failed.') },
   })
   expect(screen.getByTestId('alert')).toHaveTextContent('Mutation failed.')
+})
+
+it('duplicates a task and announces it', async () => {
+  const mutateAsync = vi.fn().mockResolvedValue({ ...todoFixture, id: 8 })
+  mockDuplicate({ mutateAsync })
+  const { notify, user } = setup({ todos: [todoFixture] })
+  await user.click(
+    screen.getByRole('button', { name: 'Duplicate Prepare a demo' }),
+  )
+  expect(mutateAsync).toHaveBeenCalledWith(7)
+  expect(notify).toHaveBeenCalledWith('Task duplicated.')
+})
+
+it('does not duplicate a task while another change is in progress', async () => {
+  const mutateAsync = vi.fn()
+  mockDuplicate({ mutateAsync })
+  const { notify, user } = setup({ todos: [todoFixture], busy: true })
+  await user.click(
+    screen.getByRole('button', { name: 'Duplicate Prepare a demo' }),
+  )
+  expect(mutateAsync).not.toHaveBeenCalled()
+  expect(notify).not.toHaveBeenCalled()
+})
+
+it('stays silent when duplicating fails and shows the mutation error', async () => {
+  const error = new Error('Could not duplicate.')
+  const mutateAsync = vi.fn().mockRejectedValue(error)
+  mockDuplicate({ mutateAsync, error })
+  const { notify, user } = setup({ todos: [todoFixture] })
+  await user.click(
+    screen.getByRole('button', { name: 'Duplicate Prepare a demo' }),
+  )
+  expect(mutateAsync).toHaveBeenCalledTimes(1)
+  expect(notify).not.toHaveBeenCalled()
+  expect(screen.getByTestId('alert')).toHaveTextContent('Could not duplicate.')
+})
+
+it('prefers the duplicate error over the query error', () => {
+  mockDuplicate({ error: new Error('Duplicate failed.') })
+  setup({
+    query: { isError: true, error: new Error('Query failed.') },
+  })
+  expect(screen.getByTestId('alert')).toHaveTextContent('Duplicate failed.')
+})
+
+it('resets the duplicate error before retrying', async () => {
+  const reset = vi.fn()
+  const refetch = vi.fn().mockResolvedValue(undefined)
+  mockDuplicate({ reset, error: new Error('Duplicate failed.') })
+  const { user } = setup({ query: { refetch } })
+  await user.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1))
+  expect(reset).toHaveBeenCalledTimes(1)
 })
 
 it('shows no alert and disables creating while the list is loading', () => {

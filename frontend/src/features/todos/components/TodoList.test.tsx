@@ -32,12 +32,14 @@ vi.mock('./TodoItem', () => ({
     onToggle,
     onEdit,
     onDelete,
+    onDuplicate,
   }: {
     todo: Todo
     busy: boolean
     onToggle: () => void
     onEdit: () => void
     onDelete: () => void
+    onDuplicate?: () => void
   }) => (
     <li>
       <span>{todo.title}</span>
@@ -46,6 +48,9 @@ vi.mock('./TodoItem', () => ({
       </button>
       <button onClick={onEdit}>Edit {todo.title}</button>
       <button onClick={onDelete}>Delete {todo.title}</button>
+      {onDuplicate && (
+        <button onClick={onDuplicate}>Duplicate {todo.title}</button>
+      )}
     </li>
   ),
 }))
@@ -123,6 +128,31 @@ it('renders every task and forwards actions for the chosen task', async () => {
   expect(onEdit).toHaveBeenCalledWith(todoFixture)
   await user.click(screen.getByRole('button', { name: 'Delete Second task' }))
   expect(onDelete).toHaveBeenCalledWith(second)
+})
+
+it('forwards duplicate requests for the chosen task only when handled', async () => {
+  const user = userEvent.setup()
+  const second = { ...todoFixture, id: 8, title: 'Second task' }
+  const onDuplicate = vi.fn()
+  const { rerender } = render(
+    <TodoList {...baseProps} hasTodos todos={[todoFixture, second]} />,
+  )
+  expect(
+    screen.queryByRole('button', { name: 'Duplicate Second task' }),
+  ).not.toBeInTheDocument()
+  rerender(
+    <TodoList
+      {...baseProps}
+      hasTodos
+      todos={[todoFixture, second]}
+      onDuplicate={onDuplicate}
+    />,
+  )
+  await user.click(
+    screen.getByRole('button', { name: 'Duplicate Second task' }),
+  )
+  expect(onDuplicate).toHaveBeenCalledTimes(1)
+  expect(onDuplicate).toHaveBeenCalledWith(second)
 })
 
 it('passes the busy state to the tasks', () => {

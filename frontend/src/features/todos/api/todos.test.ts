@@ -52,6 +52,13 @@ it('does not send read-only fields when updating with a full task', async () => 
   ])
 })
 
+it('duplicates a task by id with a POST', async () => {
+  const copy = { ...todoFixture, id: 8, title: 'Prepare a demo (copy)' }
+  vi.mocked(request).mockResolvedValue(copy)
+  await expect(todosApi.duplicate(7)).resolves.toEqual(copy)
+  expect(request).toHaveBeenCalledWith('/todos/7/duplicate', { method: 'POST' })
+})
+
 it('deletes a task by id', async () => {
   vi.mocked(request).mockResolvedValue(undefined)
   await expect(todosApi.remove(7)).resolves.toBeUndefined()
