@@ -34,6 +34,7 @@ export function packageOf(file) {
 }
 
 export function isTestFile(file) {
+  if (file.split(/[\\/]/).includes('..')) return false;
   return TEST_PATTERNS.some((pattern) => pattern.test(file));
 }
 
