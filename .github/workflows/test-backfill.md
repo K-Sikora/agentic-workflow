@@ -29,10 +29,35 @@ engine:
     ANTHROPIC_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     ANTHROPIC_BASE_URL: https://openrouter.ai/api
 network:
-  allowed: [defaults, node, openrouter.ai]
+  # Dependencies are installed before the agent starts, so it only needs the model endpoint.
+  allowed: [defaults, openrouter.ai]
 tools:
   edit:
-  bash: ["npm:*", "node:*", "git status", "git diff:*", "git log:*", "git show:*", "git add:*", "git commit:*", "cat", "ls", "head", "tail", "grep", "wc", "jq"]
+  bash:
+    - "npm --prefix backend test:*"
+    - "npm --prefix frontend test:*"
+    - "npm --prefix backend run typecheck"
+    - "npm --prefix frontend run typecheck"
+    - "npm --prefix backend run test:coverage:*"
+    - "npm --prefix frontend run test:coverage:*"
+    - "node tools/test-agent/analyze.mjs:*"
+    - "node tools/test-agent/verify.mjs:*"
+    - "node frontend/node_modules/prettier/bin/prettier.cjs --write:*"
+    - "git status"
+    - "git diff:*"
+    - "git log:*"
+    - "git show:*"
+    - "git rev-parse:*"
+    - "git merge-base:*"
+    - "git add:*"
+    - "git commit:*"
+    - "cat"
+    - "ls"
+    - "head"
+    - "tail"
+    - "grep"
+    - "wc"
+    - "jq"
 pre-agent-steps:
   - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
     with:
