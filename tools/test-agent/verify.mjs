@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Independent verification of test changes. The agent runs it as a self-check and CI runs it as the gate.
-// Usage: node tools/test-agent/verify.mjs --since <ref> [--base <ref>] [--runs 3] [--out file.json] [--markdown file.md]
-//   --since  commit before the test changes; everything changed after it (committed or not) is checked
-//   --base   PR base; tests are also run against the merge-base code to see which ones detect the change
+// Usage: node tools/test-agent/verify.mjs --since <ref> [--base <ref>] [--runs 3] [--policy-only] [--out file.json] [--markdown file.md]
+//   --since        commit before the test changes; everything changed after it (committed or not) is checked
+//   --base         PR base; tests are also run against the merge-base code to see which ones detect the change
+//   --policy-only  only check which files changed, without installing or running anything
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,7 +38,7 @@ const testFiles = report.files.filter((f) => f.status !== 'D' && isTestFile(f.fi
 if (!changes.length) report.verdict = 'no-changes';
 
 // Policy is checked before anything from the change runs.
-if (report.verdict === 'ok') {
+if (report.verdict === 'ok' && !args['policy-only']) {
   for (const name of new Set(testFiles.map(packageOf))) {
     const dir = PACKAGES[name].dir;
     const result = { typecheck: null, suite: null, format: null, flaky: [] };
@@ -72,7 +73,7 @@ if (report.verdict === 'ok') {
   }
 }
 
-if (report.verdict === 'ok' && args.base) report.detection = detectAgainstBase(git(['merge-base', args.base, args.since]).trim(), testFiles);
+if (report.verdict === 'ok' && args.base && !args['policy-only']) report.detection = detectAgainstBase(git(['merge-base', args.base, args.since]).trim(), testFiles);
 
 const outFile = args.out ?? '.test-agent/verify.json';
 writeFileSync(outFile, `${JSON.stringify(report, null, 2)}\n`);
