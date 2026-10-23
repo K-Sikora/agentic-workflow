@@ -14,8 +14,7 @@ git -c user.name=test-agent-gate -c user.email=gate@invalid am /tmp/gh-aw/aw-*.p
 # Fail closed, and check which files changed before installing anything.
 node "$here/verify.mjs" --since "$since" --policy-only --out "$out/verify.json" --markdown "$out/verify.md"
 
-npm ci --prefix backend --no-audit --no-fund
-npm ci --prefix frontend --no-audit --no-fund
+bash "$here/install.sh"
 
 status=0
 node "$here/verify.mjs" --since "$since" ${base:+--base "$base"} --out "$out/verify.json" --markdown "$out/verify.md" || status=$?

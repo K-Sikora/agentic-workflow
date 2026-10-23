@@ -30,10 +30,27 @@ tools:
   edit:
   bash: ["npm:*", "node:*", "git status", "git diff:*", "git log:*", "git show:*", "git add:*", "git commit:*", "cat", "ls", "head", "tail", "grep", "wc", "jq"]
 pre-agent-steps:
+  - name: Skip the agent's own commits
+    id: guard
+    run: |
+      # The newest commit that changes files is the agent's own: its tests are already verified.
+      # Empty commits (such as the one that triggers CI) are ignored by the pathspec.
+      if git log -1 --format=%s HEAD -- . | grep -q '(unit-test-agent)$'; then
+        outputs="${GH_AW_SAFE_OUTPUTS:-$RUNNER_TEMP/gh-aw/safeoutputs/outputs.jsonl}"
+        mkdir -p "$(dirname "$outputs")"
+        echo '{"type":"noop","message":"The latest changes are the agent'"'"'s own tests."}' >> "$outputs"
+        echo "skip=true" >> "$GITHUB_OUTPUT"
+      fi
   - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+    if: steps.guard.outputs.skip != 'true'
     with:
       node-version: 22
+      cache: npm
+      cache-dependency-path: |
+        backend/package-lock.json
+        frontend/package-lock.json
   - name: Extract trusted tools from the base branch
+    if: steps.guard.outputs.skip != 'true'
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
     run: |
@@ -41,25 +58,18 @@ pre-agent-steps:
       mkdir -p "$RUNNER_TEMP/trusted"
       git archive "$BASE_SHA" tools/test-agent | tar -x -C "$RUNNER_TEMP/trusted"
   - name: Install dependencies
-    run: |
-      npm ci --prefix backend --no-audit --no-fund
-      npm ci --prefix frontend --no-audit --no-fund
+    if: steps.guard.outputs.skip != 'true'
+    run: bash "$RUNNER_TEMP/trusted/tools/test-agent/install.sh"
   - name: Analyse the pull request
+    if: steps.guard.outputs.skip != 'true'
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
     run: |
-      outputs="${GH_AW_SAFE_OUTPUTS:-$RUNNER_TEMP/gh-aw/safeoutputs/outputs.jsonl}"
-      mkdir -p "$(dirname "$outputs")"
-      # The newest commit that changes files is the agent's own: its tests are already verified.
-      # Empty commits (such as the one that triggers CI) are ignored by the pathspec.
-      if git log -1 --format=%s HEAD -- . | grep -q '(unit-test-agent)$'; then
-        echo '{"type":"noop","message":"The latest changes are the agent'"'"'s own tests."}' >> "$outputs"
-        exit 0
-      fi
       node "$RUNNER_TEMP/trusted/tools/test-agent/analyze.mjs" --base "$BASE_SHA" --coverage --markdown .test-agent/analysis.md
       cat .test-agent/analysis.md >> "$GITHUB_STEP_SUMMARY"
       if [ "$(jq '.summary.actionable' .test-agent/analysis.json)" = "0" ]; then
         # Nothing to test: end the run before any model call.
+        outputs="${GH_AW_SAFE_OUTPUTS:-$RUNNER_TEMP/gh-aw/safeoutputs/outputs.jsonl}"
         echo '{"type":"noop","message":"No unit-testable source changes in this pull request."}' >> "$outputs"
       fi
 safe-outputs:

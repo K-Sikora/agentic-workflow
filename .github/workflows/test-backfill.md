@@ -37,10 +37,12 @@ pre-agent-steps:
   - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
     with:
       node-version: 22
+      cache: npm
+      cache-dependency-path: |
+        backend/package-lock.json
+        frontend/package-lock.json
   - name: Install dependencies
-    run: |
-      npm ci --prefix backend --no-audit --no-fund
-      npm ci --prefix frontend --no-audit --no-fund
+    run: bash tools/test-agent/install.sh
   - name: Analyse coverage gaps
     env:
       PACKAGE: ${{ github.event.inputs.package }}
