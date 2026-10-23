@@ -13,6 +13,7 @@ interface TodoListProps {
   onToggle: (todo: Todo) => void
   onEdit: (todo: Todo) => void
   onDelete: (todo: Todo) => void
+  onDuplicate?: (todo: Todo) => void
 }
 
 export function TodoList({
@@ -25,6 +26,7 @@ export function TodoList({
   onToggle,
   onEdit,
   onDelete,
+  onDuplicate,
 }: TodoListProps) {
   return (
     <section aria-label="Task list">
@@ -47,6 +49,7 @@ export function TodoList({
               onToggle={() => onToggle(todo)}
               onEdit={() => onEdit(todo)}
               onDelete={() => onDelete(todo)}
+              onDuplicate={onDuplicate && (() => onDuplicate(todo))}
             />
           ))}
         </ul>

@@ -2,6 +2,9 @@ import { Router } from 'express';
 import type { TodoStore } from './types.js';
 import { createSchema, updateSchema, idSchema } from './validators.js';
 
+const COPY_SUFFIX = ' (copy)';
+const MAX_TITLE_LENGTH = 120;
+
 export function createTodosRouter(repository: TodoStore) {
   const router = Router();
   router.param('id', (req, res, next, id) => {
@@ -15,6 +18,18 @@ export function createTodosRouter(repository: TodoStore) {
     const result = createSchema.safeParse(req.body);
     if (!result.success) return res.status(422).json({ detail: result.error.issues });
     res.status(201).json(await repository.create(result.data));
+  });
+  router.post('/:id/duplicate', async (req, res) => {
+    const todo = await repository.get(Number(res.locals.todoId));
+    if (!todo) return res.status(404).json({ detail: 'Task not found.' });
+    const copy = await repository.create({
+      title: `${todo.title.slice(0, MAX_TITLE_LENGTH - COPY_SUFFIX.length)}${COPY_SUFFIX}`,
+      description: todo.description,
+      priority: todo.priority,
+      due_date: todo.due_date,
+      completed: false,
+    });
+    res.status(201).json(copy);
   });
   router.get('/:id', async (req, res) => {
     const todo = await repository.get(Number(res.locals.todoId));
