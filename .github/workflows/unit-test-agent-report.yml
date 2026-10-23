@@ -36,9 +36,11 @@ jobs:
           pr="$(cat gate/pr-number)"
           [[ "$pr" =~ ^[0-9]+$ ]] || { echo "Invalid PR number"; exit 1; }
           marker='<!-- unit-test-agent:verification -->'
+          zwsp=$'​'
           {
             echo "$marker"
-            head -c 60000 gate/verify.md
+            # Test names come from the pull request, so @mentions in them must not notify anyone.
+            head -c 60000 gate/verify.md | sed "s/@/@${zwsp}/g"
             echo
             echo "Measured by CI on \`${HEAD_SHA:0:7}\` plus the agent's patch, independently of the agent's own report. [Workflow run]($RUN_URL)"
           } > body.md
