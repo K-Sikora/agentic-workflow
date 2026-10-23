@@ -96,15 +96,15 @@ export function mapTests(testFiles, readFile) {
   return (sourceFile) => map.get(stripExtension(sourceFile)) ?? [];
 }
 
-// Uncovered source lines from an istanbul coverage-final.json entry.
+// Uncovered source lines from an istanbul coverage-final.json entry. Like istanbul's line
+// coverage, a statement counts for the line it starts on, and a line is covered if any statement on it ran.
 export function uncoveredLines(fileCoverage) {
-  const lines = new Set();
+  const hits = new Map();
   for (const [id, count] of Object.entries(fileCoverage.s)) {
-    if (count > 0) continue;
-    const { start, end } = fileCoverage.statementMap[id];
-    for (let line = start.line; line <= end.line; line++) lines.add(line);
+    const line = fileCoverage.statementMap[id].start.line;
+    hits.set(line, Math.max(hits.get(line) ?? 0, count));
   }
-  return [...lines].sort((a, b) => a - b);
+  return [...hits].filter(([, count]) => count === 0).map(([line]) => line).sort((a, b) => a - b);
 }
 
 export function toRanges(lines) {

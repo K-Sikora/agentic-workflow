@@ -39,14 +39,20 @@ test('maps sources to tests that import them, ignoring mocked modules', () => {
   assert.deepEqual(find('backend/src/features/todos/router.ts'), ['backend/tests/router.test.ts']);
 });
 
-test('lists uncovered lines from istanbul statement counts', () => {
+test('lists uncovered lines the way istanbul counts line coverage', () => {
   const coverage = {
-    s: { 0: 1, 1: 0, 2: 0 },
-    statementMap: { 0: { start: { line: 1 }, end: { line: 1 } }, 1: { start: { line: 3 }, end: { line: 4 } }, 2: { start: { line: 6 }, end: { line: 6 } } },
+    s: { 0: 1, 1: 0, 2: 0, 3: 0, 4: 1 },
+    statementMap: {
+      0: { start: { line: 1 }, end: { line: 1 } },
+      1: { start: { line: 3 }, end: { line: 5 } },
+      2: { start: { line: 4 }, end: { line: 4 } },
+      3: { start: { line: 7 }, end: { line: 7 } },
+      4: { start: { line: 7 }, end: { line: 7 } },
+    },
   };
   const lines = uncoveredLines(coverage);
-  assert.deepEqual(lines, [3, 4, 6]);
-  assert.equal(formatRanges(toRanges(lines)), '3-4, 6');
+  assert.deepEqual(lines, [3, 4]);
+  assert.equal(formatRanges(toRanges(lines)), '3-4');
 });
 
 test('summarizes vitest json results, including files that fail to load', () => {
