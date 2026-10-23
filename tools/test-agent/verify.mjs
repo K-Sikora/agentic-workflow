@@ -4,7 +4,7 @@
 //   --since        commit before the test changes; everything changed after it (committed or not) is checked
 //   --base         PR base; tests are also run against the merge-base code to see which ones detect the change
 //   --policy-only  only check which files changed, without installing or running anything
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -87,11 +87,14 @@ function detectAgainstBase(sha, files) {
   if (!specs.length) return {};
   const dir = mkdtempSync(path.join(os.tmpdir(), 'test-agent-base-'));
   const detection = {};
+  const links = [];
   try {
     git(['worktree', 'add', '--detach', dir, sha]);
     for (const name of new Set(specs.map(packageOf))) {
       const pkg = PACKAGES[name].dir;
-      symlinkSync(path.resolve(pkg, 'node_modules'), path.join(dir, pkg, 'node_modules'), 'junction');
+      const link = path.join(dir, pkg, 'node_modules');
+      symlinkSync(path.resolve(pkg, 'node_modules'), link, 'junction');
+      links.push(link);
       if (name === 'backend' && existsSync('backend/src/generated')) cpSync('backend/src/generated', path.join(dir, 'backend/src/generated'), { recursive: true });
       for (const file of files.filter((f) => packageOf(f) === name)) cpSync(file, path.join(dir, file));
       const own = specs.filter((f) => packageOf(f) === name);
@@ -107,6 +110,8 @@ function detectAgainstBase(sha, files) {
       }
     }
   } finally {
+    // Remove the links first: deleting the worktree must never reach the real node_modules through them.
+    for (const link of links) unlinkSync(link);
     run('git', ['worktree', 'remove', '--force', dir]);
     rmSync(dir, { recursive: true, force: true });
   }
