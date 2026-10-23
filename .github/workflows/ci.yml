@@ -26,6 +26,20 @@ jobs:
           node-version: 22
       - run: node --test "tools/test-agent/*.test.mjs"
 
+  workflow-security:
+    name: workflow security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan workflows with zizmor
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --require-hashes -r .github/zizmor/requirements.txt
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --offline --min-severity medium .github/workflows
+
   test:
     name: ${{ matrix.package }}
     runs-on: ubuntu-24.04

@@ -1,8 +1,10 @@
 name: Unit test agent report
 
 # Runs from the default branch, so a pull request cannot change how its own results are reported.
+# workflow_run is safe here: no pull request code is checked out or executed, the artifact is treated
+# as data (numeric PR number, mentions neutralized, size capped) and the token can only comment.
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: ["Unit test agent"]
     types: [completed]
 
