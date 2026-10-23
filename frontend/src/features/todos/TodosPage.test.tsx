@@ -337,6 +337,14 @@ it('shows no alert and disables creating while the list is loading', () => {
   expect(screen.getByRole('button', { name: 'New task' })).toBeDisabled()
 })
 
+it('treats a query without data as an empty list', () => {
+  setup({ query: { data: undefined, isPending: true } })
+  expect(useTodoFilters).toHaveBeenCalledWith([])
+  expect(
+    screen.getByText(/loading=true failed=false hasTodos=false/),
+  ).toBeVisible()
+})
+
 it('disables retrying while the query is fetching', () => {
   setup({
     query: { isFetching: true, isError: true, error: new Error('Down.') },
