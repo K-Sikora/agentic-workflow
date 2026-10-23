@@ -13,7 +13,8 @@ permissions:
   pull-requests: read
 concurrency:
   group: unit-test-agent-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # Queue instead of cancel: the agent's own CI-trigger commit starts a run while this one is still publishing.
+  cancel-in-progress: false
 engine:
   id: claude
   model: anthropic/claude-sonnet-5.5
