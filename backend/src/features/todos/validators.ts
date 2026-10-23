@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 const fields = {
   title: z.string().trim().min(1).max(120),
-  description: z.string().trim().max(2000),
+  description: z.string().trim().max(500),
   priority: z.enum(['low', 'medium', 'high']),
   due_date: z.iso.date().nullable(),
   completed: z.boolean(),
