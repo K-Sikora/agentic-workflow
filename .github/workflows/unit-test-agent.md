@@ -101,20 +101,10 @@ safe-outputs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          out="$RUNNER_TEMP/test-agent-gate"
-          mkdir -p "$out" "$RUNNER_TEMP/trusted"
-          echo "$PR_NUMBER" > "$out/pr-number"
+          mkdir -p "$RUNNER_TEMP/test-agent-gate" "$RUNNER_TEMP/trusted"
+          echo "$PR_NUMBER" > "$RUNNER_TEMP/test-agent-gate/pr-number"
           git archive "$BASE_SHA" tools/test-agent | tar -x -C "$RUNNER_TEMP/trusted"
-          verify="$RUNNER_TEMP/trusted/tools/test-agent/verify.mjs"
-          git -c user.name=test-agent-gate -c user.email=gate@invalid am /tmp/gh-aw/aw-*.patch
-          # Fail closed: the push and the comment are only applied when every check passes.
-          node "$verify" --since "$HEAD_SHA" --policy-only --out "$out/verify.json" --markdown "$out/verify.md"
-          npm ci --prefix backend --no-audit --no-fund
-          npm ci --prefix frontend --no-audit --no-fund
-          status=0
-          node "$verify" --since "$HEAD_SHA" --base "$BASE_SHA" --out "$out/verify.json" --markdown "$out/verify.md" || status=$?
-          cat "$out/verify.md" >> "$GITHUB_STEP_SUMMARY"
-          exit $status
+          bash "$RUNNER_TEMP/trusted/tools/test-agent/gate.sh" "$HEAD_SHA" "$BASE_SHA"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && needs.agent.outputs.has_patch == 'true'
         with:

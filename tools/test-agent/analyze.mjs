@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Usage:
 //   node tools/test-agent/analyze.mjs --base <ref> [--coverage] [--out file.json] [--markdown file.md]
-//   node tools/test-agent/analyze.mjs --all [--coverage] [--out file.json] [--markdown file.md]
+//   node tools/test-agent/analyze.mjs --all [--package backend|frontend] [--coverage] [--out file.json] [--markdown file.md]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -41,6 +41,8 @@ if (mode === 'all') {
     else candidates.push({ file, status: { A: 'added', M: 'modified', R: 'renamed' }[status] ?? status });
   }
 }
+
+if (args.package) candidates = candidates.filter((c) => packageOf(c.file) === args.package);
 
 const testFilesByPackage = Object.fromEntries(Object.entries(PACKAGES).map(([name, p]) => [
   name, listFiles(p.dir, (f) => /\.test\.tsx?$/.test(f) && isTestFile(f)),
