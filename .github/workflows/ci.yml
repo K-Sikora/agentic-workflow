@@ -48,7 +48,10 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ matrix.package }}/package-lock.json
 
-      - run: npm ci --no-audit --no-fund
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - if: matrix.package == 'backend'
+        run: npm run db:generate
 
       - run: npm run typecheck
 
