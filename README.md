@@ -1,5 +1,7 @@
 # Taskly App Node
 
+Unit tests are written and maintained by a custom agent in an agentic PR workflow. See [SOLUTION.md](SOLUTION.md).
+
 ## Setup
 
 ```sh
